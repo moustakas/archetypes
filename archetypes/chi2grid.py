@@ -1,17 +1,18 @@
 #!/usr/bin/env python
 
-"""Build the binary chi2 grid based on the parent sample.
+"""Build the chi2 grid based on the parent sample.
 
 """
 from __future__ import division, print_function
 
 import os
 import sys
-import argparse
 import logging
+import argparse
 import numpy as np
-
-from archetypes import io
+from glob import glob
+from astropy.io import fits
+from astropy.table import Table
 
 def main():
 
@@ -40,10 +41,11 @@ def main():
     logging.basicConfig(format='%(message)s',level=lvl,stream=sys.stdout)
     log = logging.getLogger('__name__')
 
+    objtype = args.objtype
+    ltype = objtype.lower()
     log.info('Building chi2 grid for {}s.'.format(objtype))
 
     # Set default output file name.
-    ltype = objtype.lower()
     if args.outfile:
         outfile = args.outfile
         if outfile == 'OBJTYPE-chi2grid.txt':
@@ -59,7 +61,8 @@ def main():
 
     objpath = os.getenv(key)
 
-    objfile_wild = glob(os.path.join(objpath,ltype+'_templates_*.fits'))
+    objfile_wild = os.path.join(objpath,ltype+'_templates_*.fits')
+    objfile = glob(objfile_wild)
     nfile = len(objfile)
 
     if nfile>0:
@@ -73,36 +76,47 @@ def main():
         log.error('Parent spectra file {} not found'.format(objfile_wild))
         raise IOError()
 
-    flux, hdr = fits.getdata(objfile_latest, 0, header=True)
+    flux1, hdr = fits.getdata(objfile_latest, 0, header=True)
     meta = Table(fits.getdata(objfile_latest, 1))
     #wave = 10**(hdr['CRVAL1'] + np.arange(hdr['NAXIS1'])*hdr['CDELT1'])
-    wave = fits.getdata(objfile_latest, 2)
+    wave1 = fits.getdata(objfile_latest, 2)
 
+    # Restrict the wavelength range to something reasonable.
+    wavecut = np.where(((wave1>3500) & (wave1<1E4))*1)[0]
+    #wavecut = np.where(((wave1>1200) & (wave1<5E4))*1)[0]
+    flux = flux1[:,wavecut]
+    wave = wave1[wavecut]
+
+    flux = flux[:40,:] # testing!
     npix = flux.shape[1]
     ntemp = flux.shape[0]
 
-    # Assign each spectrum a constant S/N~20 between 6800 and 7200 A.
-    ivar = np.zeros_like(flux)
+    ivar = np.ones_like(flux)
+    #ivar = (20.0/flux)**2
 
+    # Normalize to the median flux around 6800-7200 A.
     waverange = np.where(((wave>6800) & (wave<7200))*1)
     for ib in range(ntemp):
-        scale = np.median(flux[ib,waverange])
-        scale = flux[ib,waverange]/args.snr
-        ivar[ib,:] = (args.snr/flux[ib,:])^2
+        flux[ib,:] /= np.median(flux[ib,waverange])
+        ivar[ib,:] = (10/flux[ib,:])**2
 
-
-    waverange = where((wave1 gt 6800.0) and (wave1 lt 7200.0))
-    fopt1 = fopt_primus*0.0
-    ivar1 = fopt_primus*0.0
-    for ii = 0, nobj-1 do begin 
-       fopt1[*,ii] = fopt_primus[*,ii]/median(fopt_primus[waverange,ii])
-       snr = mean(fopt1[waverange,ii] * sqrt(ivar_primus[waverange]))
-       ivar1[*,ii] = ivar_primus * (20.0 / snr)^2
-    endfor
-
+    # Testing!
+    if args.verbose:
+        import matplotlib.pyplot as plt
+        for ib in range(ntemp):
+            plt.plot(wave,flux[ib,:])
+        plt.show()
 
     # Build the chi2 grid
-    chi2grid = np.zeros_like(flux)
+    chi2grid = np.zeros([ntemp,ntemp])
+    for ii in range(ntemp):
+        for jj in range(ntemp):
+            chi2grid[jj,ii] = np.sum(ivar[ii,:]*(flux[ii,:]-flux[jj,:])**2)
+    chi2grid[chi2grid>0] -= chi2grid[chi2grid>0].min()
+
+    print(chi2grid)
+    print((chi2grid<2)*1)
+    np.savetxt(outfile,chi2grid)
 
 if __name__ == '__main__':
     main()
