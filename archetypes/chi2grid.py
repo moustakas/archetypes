@@ -87,18 +87,26 @@ def main():
     flux = flux1[:,wavecut]
     wave = wave1[wavecut]
 
-    flux = flux[:40,:] # testing!
+    keep = np.where((meta['D4000']>1.4)*1 & (meta['D4000']<2)*1)[0]
+    flux = flux[keep,:] # testing!
+    #flux = flux[:40,:] # testing!
+    flux = flux[np.argsort(meta['D4000'][keep]),:]
+    
     npix = flux.shape[1]
     ntemp = flux.shape[0]
+    print(ntemp, npix)
 
-    ivar = np.ones_like(flux)
-    #ivar = (20.0/flux)**2
+    #ivar = np.ones_like(flux)
+    #ivar = (1.0/flux)**2
+
+    prec = 0.1 # desired precision 
 
     # Normalize to the median flux around 6800-7200 A.
     waverange = np.where(((wave>6800) & (wave<7200))*1)
     for ib in range(ntemp):
+        #print(ib)
         flux[ib,:] /= np.median(flux[ib,waverange])
-        ivar[ib,:] = (10/flux[ib,:])**2
+        #ivar[ib,:] = (10/flux[ib,:])**2
 
     # Testing!
     if args.verbose:
@@ -108,15 +116,31 @@ def main():
         plt.show()
 
     # Build the chi2 grid
-    chi2grid = np.zeros([ntemp,ntemp])
-    for ii in range(ntemp):
-        for jj in range(ntemp):
-            chi2grid[jj,ii] = np.sum(ivar[ii,:]*(flux[ii,:]-flux[jj,:])**2)
-    chi2grid[chi2grid>0] -= chi2grid[chi2grid>0].min()
+    # The next line assumes that all amp=1 and all ivar=1!! Hack
+    print('Computing chi^2')
+    chi2grid = np.sum((flux[:,np.newaxis,:] - flux[np.newaxis,:,:])**2, axis=2)
 
-    print(chi2grid)
-    print((chi2grid<2)*1)
+    ## Build the chi2 grid
+    #chi2grid = np.zeros([ntemp,ntemp])
+    #for ii in range(ntemp):
+    #    print(ii)
+    #    for jj in range(ii+1,ntemp):
+    #        #amp = np.sum(ivar[ii,:]*flux[ii,:]*flux[jj,:])/np.sum(ivar[ii,:]*flux[jj,:]**2)
+    #        #chi2grid[jj,ii] = np.sum(ivar[ii,:]*(flux[ii,:]-amp*flux[jj,:])**2)
+    #        chi2grid[jj,ii] = np.sum((flux[ii,:]-flux[jj,:])**2)
+    #        chi2grid[ii,jj] = chi2grid[jj,ii]
+
+    #chi2grid[chi2grid>0] -= chi2grid[chi2grid>0].min()
+
+    matrix = (chi2grid<(npix*prec**2))*1
+    #print(chi2grid)
+    print(matrix)
+    print(np.sum(matrix,axis=0), np.sum(matrix,axis=1))
     np.savetxt(outfile,chi2grid)
+
+    #outfile = '{}-{:.1f}.lp'.format(ltype,args.chi2cut)
+    outfile = '{}.lp'.format(ltype)
+    np.savetxt(outfile,matrix,fmt='%g')
 
 if __name__ == '__main__':
     main()
