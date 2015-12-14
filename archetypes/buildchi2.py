@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Build the chi2 grid based on the parent sample.
+"""Build the chi2 grid from the parent sample for a given object type.
 
 """
 from __future__ import division, print_function
@@ -10,22 +10,18 @@ import sys
 import logging
 import argparse
 import numpy as np
-from glob import glob
-from astropy.io import fits
-from astropy.table import Table
+
+from archetypes.io import read_parent
 
 def main():
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                     description='Build the chi2 grid.')
-                                         
+                                     description='Build the chi2 matrix.')
     parser.add_argument('-o','--objtype', type=str, default=None, metavar='', 
                         help='object type (ELG, LRG, STAR)') 
     parser.add_argument('-v', '--verbose', action='store_true', 
                         help='toggle on verbose output')
-    parser.add_argument('--snr', type=float, default=20.0, metavar='', 
-                        help='signal-to-noise ratio')
-    parser.add_argument('--outfile', type=str, default='OBJTYPE-chi2grid.txt', metavar='', 
+    parser.add_argument('--outfile', type=str, default='OBJTYPE-chi2.txt', metavar='', 
                         help='output ASCII file name')
 
     args = parser.parse_args()
@@ -42,39 +38,18 @@ def main():
     log = logging.getLogger('__name__')
 
     objtype = args.objtype
-    ltype = objtype.lower()
     log.info('Building chi2 grid for {}s.'.format(objtype))
 
     # Set default output file name.
     if args.outfile:
         outfile = args.outfile
         if outfile == 'OBJTYPE-chi2grid.txt':
-            outfile = ltype+'-chi2grid.txt'
+            outfile = objtype.lower()+'-chi2grid.txt'
     else: 
-        outfile = ltype+'-chi2grid.txt'
-    
-    # Read the parent sample of spectra.
-    key = 'DESI_BASIS_TEMPLATES'
-    if key not in os.environ:
-        log.fatal('Required ${} environment variable not set'.format(key))
-        raise EnvironmentError
+        outfile = objtype.lower()+'-chi2grid.txt'
 
-    objpath = os.getenv(key)
-
-    objfile_wild = os.path.join(objpath,ltype+'_templates_*.fits')
-    objfile = glob(objfile_wild)
-    nfile = len(objfile)
-
-    if nfile>0:
-        objfile_latest = objfile[nfile-1] # latest version
-        if os.path.isfile(objfile_latest):
-            log.info('Reading {}'.format(objfile_latest))
-        else: 
-            log.error('Parent spectra file {} not found'.format(objfile_latest))
-            raise IOError()
-    else:
-        log.error('Parent spectra file {} not found'.format(objfile_wild))
-        raise IOError()
+    # Read the parent sample.
+    ff, ww, mm = read_parent('ELG')
 
     flux1, hdr = fits.getdata(objfile_latest, 0, header=True)
     meta = Table(fits.getdata(objfile_latest, 1))
