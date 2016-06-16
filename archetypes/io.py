@@ -11,6 +11,7 @@ import os
 import sys
 import logging
 import numpy as np
+import multiprocessing
 
 from desispec.interpolation import resample_flux
 
@@ -21,7 +22,7 @@ log = logging.getLogger('__name__')
 def _resample_flux(args):
     return resample_flux(*args)
 
-def read_parent(objtype, outwave=None, nspec=None, infile=None):
+def read_parent(objtype, outwave=None, nspec=None, seed=None, infile=None):
     """Read and return the parent spectral templates for a given object type.
        Optionally returns a randomly selected subset of nspec spectra sampled at
        wavelengths outwave.
@@ -31,6 +32,7 @@ def read_parent(objtype, outwave=None, nspec=None, infile=None):
       outwave (numpy.array, optional): array of wavelength at which to sample 
         the spectra.
       nspec (int, optional): number of templates to return
+      seed (long, optional): input seed for the random number generator.
       infile (str, optional): full path to input template file to read,
         over-riding the contents of the $ARCHETYPES_DIR environment
         variable.
@@ -86,8 +88,9 @@ def read_parent(objtype, outwave=None, nspec=None, infile=None):
     # do this using fitsio.
     ntemplates = flux.shape[0]
     if nspec is not None:
-        these = np.random.choice(np.arange(ntemplates),nspec)
-        flux = flux[these,:]
+        rand = np.random.RandomState(seed)
+        these = rand.choice(np.arange(ntemplates), nspec)
+        flux = flux[these, :]
         meta = meta[these]
 
     # Optionally resample the templates at specific wavelengths.  Use
