@@ -11,7 +11,7 @@ import logging
 import argparse
 import numpy as np
 
-from archetypes.io import read_parent
+from ioarchetypes import read_parent
 
 def main():
 
@@ -19,8 +19,16 @@ def main():
                                      description='Build the chi2 matrix.')
     parser.add_argument('-o','--objtype', type=str, default=None, metavar='', 
                         help='object type (ELG, LRG, STAR)') 
-    parser.add_argument('-v', '--verbose', action='store_true', 
+    parser.add_argument('--minwave', type=float, default=1500.0, 
+                        help='minimum wavelength [Angstrom]')
+    parser.add_argument('--maxwave', type=float, default=50000.0,
+                        help='maximum wavelength [Angstrom]')
+    parser.add_argument('-c','--chunksize', type=long, default=500,
+                        help='number of spectra to include in each chunk')
+    parser.add_argument('-v', '--verbose', action='store_true',
                         help='toggle on verbose output')
+    parser.add_argument('-t', '--test', action='store_true', 
+                        help='test the code by running on a mini dataset')
     parser.add_argument('--outfile', type=str, default='OBJTYPE-chi2.txt', metavar='', 
                         help='output ASCII file name')
 
@@ -38,84 +46,71 @@ def main():
     log = logging.getLogger('__name__')
 
     objtype = args.objtype
-    log.info('Building chi2 grid for {}s.'.format(objtype))
+    log.info('Building chi2 for {}s.'.format(objtype.upper()))
 
-    # Set default output file name.
-    if args.outfile:
-        outfile = args.outfile
-        if outfile == 'OBJTYPE-chi2grid.txt':
-            outfile = objtype.lower()+'-chi2grid.txt'
-    else: 
-        outfile = objtype.lower()+'-chi2grid.txt'
-
-    # Read the parent sample.
-    ff, ww, mm = read_parent('ELG')
-
-    flux1, hdr = fits.getdata(objfile_latest, 0, header=True)
-    meta = Table(fits.getdata(objfile_latest, 1))
-    #wave = 10**(hdr['CRVAL1'] + np.arange(hdr['NAXIS1'])*hdr['CDELT1'])
-    wave1 = fits.getdata(objfile_latest, 2)
-
-    # Restrict the wavelength range to something reasonable.
-    wavecut = np.where(((wave1>3500) & (wave1<1E4))*1)[0]
-    #wavecut = np.where(((wave1>1200) & (wave1<5E4))*1)[0]
-    flux = flux1[:,wavecut]
-    wave = wave1[wavecut]
-
-    keep = np.where((meta['D4000']>1.4)*1 & (meta['D4000']<2)*1)[0]
-    flux = flux[keep,:] # testing!
-    #flux = flux[:40,:] # testing!
-    flux = flux[np.argsort(meta['D4000'][keep]),:]
+    # Read the parent sample and restrict the wavelength range.
+    flux, wave, meta = read_parent('ELG')
+    nspec, npix = flux.shape
     
-    npix = flux.shape[1]
-    ntemp = flux.shape[0]
-    print(ntemp, npix)
+    log.info('Restricting the wavelength range to {}, {}'.format(args.minwave,args.maxwave))
+    trim = (wave>args.minwave)*(wave<args.maxwave)
+    flux = flux[:,trim]
+    wave = wave[trim]
+    nspec, npix = flux.shape
 
-    #ivar = np.ones_like(flux)
-    #ivar = (1.0/flux)**2
+    log.info('Found {} spectra, each with {} pixels.'.format(nspec,npix))
 
-    prec = 0.1 # desired precision 
+    # Reduce the sample for testing purposes.
+    if args.test:
+        #keep = np.arange(0,5)
+        keep = (meta['D4000']>1.4)*(meta['D4000']<2)
+        log.info('Keeping {} spectra in the test sample.'.format(np.sum(keep*1)))
+        flux = flux[keep,:]
+    nspec, npix = flux.shape
 
-    # Normalize to the median flux around 6800-7200 A.
-    waverange = np.where(((wave>6800) & (wave<7200))*1)
-    for ib in range(ntemp):
-        #print(ib)
-        flux[ib,:] /= np.median(flux[ib,waverange])
-        #ivar[ib,:] = (10/flux[ib,:])**2
+    # Build chi2 in chunks because the array operations can be very large.
+    chi2 = np.zeros((nspec,nspec))
 
-    # Testing!
+    chunksize = np.min((args.chunksize,nspec))
+    nchunk = np.ceil(nspec/chunksize).astype(long)
+    log.info('Computing chi2 in {} chunk(s).'.format(nchunk))
+
+    for ichunk in range(nchunk):
+        log.info('\r  Working on chunk {:d}/{:d}'.format(ichunk+1,nchunk))
+        
+        i1 = ichunk*chunksize
+        i2 = np.min(((ichunk+1)*chunksize,nspec))
+        fdata = flux[i1:i2,None,:]
+        fmodel = flux[None,i1:i2,:]
+
+        # See equations 7-9 in Benitez+00
+        fdd = np.sum(fdata*fdata, axis=2)
+        fmm = np.sum(fmodel*fmodel, axis=2)
+        fdm = np.sum(fdata*fmodel, axis=2)
+        amp = np.divide(fdm,fmm)
+        chi2[i1:i2, i1:i2] = fdd - amp*fdm
+
+    ## This brute-force loop demonstrates that the we're computing chi^2
+    ## correctly.
+    chi2test = np.zeros((nspec,nspec))
+    for ii in range(nspec):
+        #for jj in range(nspec):
+        for jj in range(ii+1,nspec):
+            amp = np.sum(flux[ii,:]*flux[jj,:])/np.sum(flux[jj,:]**2)
+            chi2test[ii,jj] = np.sum((flux[ii,:]-amp*flux[jj,:])**2)
+    print(chi2test/chi2)
+
+    # Write out
+    outfile = os.path.join(os.getenv('ARCHETYPES_DIR'),objtype.lower()+'-chi2.txt')
+    log.info('Writing {}'.format(outfile))
+    np.savetxt(outfile,chi2)
+
+    # Plot some spectra, for fun.
     if args.verbose:
         import matplotlib.pyplot as plt
-        for ib in range(ntemp):
+        for ib in range(nspec):
             plt.plot(wave,flux[ib,:])
         plt.show()
-
-    # Build the chi2 grid
-    # The next line assumes that all amp=1 and all ivar=1!! Hack
-    print('Computing chi^2')
-    chi2grid = np.sum((flux[:,np.newaxis,:] - flux[np.newaxis,:,:])**2, axis=2)
-
-    ## Build the chi2 grid
-    #chi2grid = np.zeros([ntemp,ntemp])
-    #for ii in range(ntemp):
-    #    print(ii)
-    #    for jj in range(ii+1,ntemp):
-    #        #amp = np.sum(ivar[ii,:]*flux[ii,:]*flux[jj,:])/np.sum(ivar[ii,:]*flux[jj,:]**2)
-    #        #chi2grid[jj,ii] = np.sum(ivar[ii,:]*(flux[ii,:]-amp*flux[jj,:])**2)
-    #        chi2grid[jj,ii] = np.sum((flux[ii,:]-flux[jj,:])**2)
-    #        chi2grid[ii,jj] = chi2grid[jj,ii]
-
-    #chi2grid[chi2grid>0] -= chi2grid[chi2grid>0].min()
-
-    matrix = (chi2grid<(npix*prec**2))*1
-    #print(chi2grid)
-    print(matrix)
-    print(np.sum(matrix,axis=0), np.sum(matrix,axis=1))
-    np.savetxt(outfile,chi2grid)
-
-    #outfile = '{}-{:.1f}.lp'.format(ltype,args.chi2cut)
-    outfile = '{}.lp'.format(ltype)
-    np.savetxt(outfile,matrix,fmt='%g')
 
 if __name__ == '__main__':
     main()
